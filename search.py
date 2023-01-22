@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 
 import sys
-from typing import Dict, List, Tuple
 import sqlite3
+from urllib.parse import urlparse
+from typing import Dict, List, Tuple
 
 db_con = sqlite3.connect('./search.db')
 db = db_con.cursor()
@@ -34,6 +35,28 @@ def search(query: str) -> List[Tuple[str, str]]:
 
 	return results
 
+def htmlize(results: List[Tuple[str, str]]) -> str:
+	head = """
+		<!DOCTYPE html>
+		<html lang="en">
+		<head>
+			<title>Search results</title>
+			<link rel="stylesheet" link="style.css" />
+		</head>
+		<body>
+			<ol>
+	"""
+
+	core = [ f'<li><a href="{path}">{title}</a></li>' for path, title in results ]
+
+	tail = """
+			</ol>
+		</body>
+		</html>
+	"""
+
+	return head + '\n'.join(core) + tail
+
 def display(results: List[Tuple[str, str]]) -> None:
 	for i, result in enumerate(results):
 		path, title = result
@@ -43,5 +66,6 @@ query = " ".join(sys.argv[1:])
 if query == "": query = 'code'
 
 results = search(query)
-display(results)
+# display(results)
+print(htmlize(results))
 
