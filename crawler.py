@@ -2,18 +2,24 @@
 
 import re
 import sys
-from urllib.parse import urljoin, urlparse
 import sqlite3
 from typing import Dict, List, Optional
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
 
-start = 'http://dlom.cc'
+sites = [
+	# 'http://dlom.cc',
+	# 'http://dylanlom.com',
+	# 'http://rss.dlom.cc',
+	'https://docs.python.org/3/',
+]
+
+blocked_extensions = [ 'pdf', 'zip', 'tar', 'bz2', 'gz', 'exe', 'appimage', 'jpg', 'jpeg', 'png', 'epub' ]
+
 db_con = sqlite3.connect('./search.db')
 db = db_con.cursor()
-
-MAX_DEPTH = 4
 
 KEYWORD_SCORES = {
 	'h6': 1,
@@ -27,19 +33,18 @@ KEYWORD_SCORES = {
 
 def is_visited(site: str) -> bool:
 	params = (site, )
-	res = db.execute('SELECT * FROM `pages` WHERE `path` = ?', params)
-	return len(res.fetchall()) > 0
+	res = db.execute('SELECT `path` FROM `pages` WHERE `path` = ?', params)
+	return res.fetchone() is not None
 
 def extract_keywords(soup: BeautifulSoup) -> Dict[str, int]:
 	keywords = {}
-
 	for keyword in KEYWORD_SCORES.keys():
 		for occurance in soup.find_all(keyword):
 			for word in occurance.get_text().split():
 				if word not in keywords: keywords[word] = 0
 				keywords[word] += KEYWORD_SCORES[keyword]
 
-	# TODO: This will incorrectly double-count all of the special tag occurances...
+	# TODO: This will incorrectly double-count all of the special tag occurances
 	for word in soup.get_text().split():
 		if word not in keywords: keywords[word] = 0
 		keywords[word] += 1
@@ -70,26 +75,24 @@ def save(site: str, title: str, keywords: Dict[str, int]) -> None:
 	save_keywords(page_id, keywords)
 	db_con.commit()
 
+def contains_substring(needles: List[str], haystack: str) -> bool:
+	for needle in needles:
+		if needle in haystack: return True
+	return False
+
 def next_site(href: str, current: str) -> Optional[str]:
 	next = urljoin(current, href)
-	if is_visited(next): return None
-	if next.split('.').pop().lower() in ['pdf']: return None
+	if next.split('.').pop().lower() in blocked_extensions: return None
 
-	scheme, netloc, *_ = urlparse(next)
+	scheme, netloc, path, *_ = urlparse(next)
+	next = f'{scheme}://{netloc}{path}'
 	if scheme not in ['http', 'https']: return None
-	if 'dlom.cc' not in netloc: return None
+	if not contains_substring(sites, next): return None
 	return next
 
-def process(site: Optional[str], level: int = 0) -> None:
-	if site is None: return
-	if level >= MAX_DEPTH: return
-
+def process(site: str) -> List[str]:
 	resp = requests.get(site)
-	if 'text/html' not in resp.headers['content-type']: return
-
-	indent = ' ' * level
-	print(f'{indent} {site}')
-
+	if 'text/html' not in resp.headers['content-type']: return []
 	soup = BeautifulSoup(resp.text, 'html.parser')
 
 	# PEP 505 when? 🙃
@@ -99,9 +102,22 @@ def process(site: Optional[str], level: int = 0) -> None:
 
 	keywords = extract_keywords(soup)
 	save(site, title, keywords)
-	for link in soup.find_all('a'):
-		href = link.get('href')
-		process(next_site(href, site), level + 1)
 
-process(start)
-db_con.close()
+	links = [ next_site(a.get('href'), site) for a in soup.find_all('a') ]
+	return [ site for site in links if site ]
+
+def crawl(sites: List[str], level: int = 0) -> None:
+	if len(sites) == 0: return
+	indent = ' ' * level
+	links = []
+
+	for site in sites:
+		if is_visited(site): continue
+		print(f'{indent} {site}')
+		links += process(site)
+
+	crawl(links, level + 1)
+
+if __name__ == '__main__':
+	crawl(sites)
+	db_con.close()
